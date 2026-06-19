@@ -36,7 +36,7 @@ resource "aws_eip" "nat" {
 }
 
 resource "aws_nat_gateway" "nat" {
-  allocation_id = aws_eip.nat.id # 👈 前回の「aws_aws_eip」のタイポを修正しました
+  allocation_id = aws_eip.nat.id
   subnet_id     = aws_subnet.public.id
   tags          = { Name = "git-actions-nat-gw" }
   depends_on    = [aws_internet_gateway.igw]
@@ -119,7 +119,7 @@ resource "aws_security_group" "db_sg" {
     from_port       = 3306
     to_port         = 3306
     protocol        = "tcp"
-    security_groups = [aws_security_group.web_sg.id] # 👈 Web用SGからの接続のみに絞る（安全！）
+    security_groups = [aws_security_group.web_sg.id]
   }
   egress {
     from_port   = 0
@@ -142,13 +142,13 @@ data "aws_ami" "amazon_linux" {
   }
 }
 
-# プライベートEC2 (先にDBがないとWebが繋げないので順序制御のため上に配置)
+# プライベートEC2 (先にDBがないとWebが繋げないので上に配置)
 resource "aws_instance" "private_db" {
   ami                    = data.aws_ami.amazon_linux.id
-  instance_type          = "t2.micro"
+  instance_type          = "t3.micro" # 👈 t3.micro に修正
   subnet_id              = aws_subnet.private.id
   vpc_security_group_ids = [aws_security_group.db_sg.id]
-  private_ip             = "10.0.2.10" # Webサーバーから接続しやすくするためにIPを固定
+  private_ip             = "10.0.2.10"
 
   # 🚀 サーバー起動時に自動でMariaDBを入れ、テスト用テーブルを作るスクリプト
   user_data = <<-EOF
@@ -169,4 +169,64 @@ resource "aws_instance" "private_db" {
   tags = { Name = "git-actions-private-ec2" }
 }
 
-#
+# パブリックEC2
+resource "aws_instance" "public_web" {
+  ami                    = data.aws_ami.amazon_linux.id
+  instance_type          = "t3.micro" # 👈 t3.micro に修正
+  subnet_id              = aws_subnet.public.id
+  vpc_security_group_ids = [aws_security_group.web_sg.id]
+  depends_on             = [aws_instance.private_db]
+
+  # 🚀 ApacheとPHPをインストールし、画面からDBに文字を保存できるWebページを自動作成
+  user_data = <<-EOF
+              #!/bin/bash
+              dnf update -y
+              dnf install -y httpd php php-mysqlnd
+              systemctl start httpd
+              systemctl enable httpd
+              
+              # 簡単なデータ入力フォーム兼表示用のPHPプログラムを配置
+              cat << 'PHP' > /var/www/html/index.php
+              <?php
+              \$conn = new mysqli('10.0.2.10', 'webuser', 'Password123!', 'testdb');
+              if (\$conn->connect_error) { die("接続失敗: " . \$conn->connect_error); }
+
+              if (\$_SERVER['REQUEST_METHOD'] === 'POST' && !empty(\$_POST['content'])) {
+                  \$stmt = \$conn->prepare("INSERT INTO messages (content) VALUES (?)");
+                  \$stmt->bind_param("s", \$_POST['content']);
+                  \$stmt->execute();
+              }
+              ?>
+              <!DOCTYPE html>
+              <html>
+              <head><meta charset="utf-8"><title>AWS Test</title></head>
+              <body>
+                <h2>DB格納テストフォーム</h2>
+                <form method="POST">
+                  <input type="text" name="content" placeholder="ここに文字を入力" required>
+                  <button type="submit">DBに保存</button>
+                </form>
+                <h3>保存されたデータ一覧:</h3>
+                <ul>
+                <?php
+                \$result = \$conn->query("SELECT content, created_at FROM messages ORDER BY id DESC");
+                while (\$row = \$result->fetch_assoc()) {
+                    echo "<li>" . htmlspecialchars(\$row['content']) . " (" . \$row['created_at'] . ")</li>";
+                }
+                ?>
+                </ul>
+              </body>
+              </html>
+              PHP
+              EOF
+
+  tags = { Name = "git-actions-public-ec2" }
+}
+
+# ========================================================
+# 6. アウトプット（確認用URLの出力）
+# ========================================================
+output "web_public_url" {
+  value       = "http://${aws_instance.public_web.public_ip}"
+  description = "WebサーバーのURLです。ブラウザで開いてみてください！"
+}
