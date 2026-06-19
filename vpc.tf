@@ -6,22 +6,23 @@ data "aws_instance" "existing_web" {
   }
 }
 
-# 🚀 2. AWSの標準機能（SSM）を使って、鍵なしでEC2の中身のPHPを安全に上書きする
+# 🚀 2. AWSのSSM機能を使って、正しい文法でEC2のPHPを上書きする
 resource "aws_ssm_association" "update_php" {
-  name             = "AWS-RunShellScript"
-  target_key       = "InstanceIds"
-  target_values    = [data.aws_instance.existing_web.id] # 👈 今あるEC2のIDを自動指定
+  name = "AWS-RunShellScript"
 
+  # 正しいターゲットの指定方法
+  targets {
+    key    = "InstanceIds"
+    values = [data.aws_instance.existing_web.id]
+  }
+
+  # 正しいパラメータの指定方法（値を文字列として渡す）
   parameters = {
-    commands = [
-      "cat << 'PHP' > /var/www/html/index.php\n${local.php_script}\nPHP",
-      "chown root:root /var/www/html/index.php",
-      "systemctl restart httpd"
-    ]
+    commands = "cat << 'PHP' > /var/www/html/index.php\n${local.php_script}\nPHP\nchown root:root /var/www/html/index.php\nsystemctl restart httpd"
   }
 }
 
-# 🛠️ 3. 修正版の正しいPHPプログラム（中身を完全に <?php に修正したもの）
+# 🛠️ 3. 修正版の正しいPHPプログラム
 locals {
   php_script = <<-EOF
               <?php
@@ -57,7 +58,7 @@ locals {
               EOF
 }
 
-# 🌐 4. 確認用URLをもう一度出力
+# 🌐 4. 確認用URLを出力
 output "web_public_url" {
   value       = "http://${data.aws_instance.existing_web.public_ip}"
 }
