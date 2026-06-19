@@ -1,25 +1,36 @@
-name: AWS Connect Test
+name: AWS Terraform Deploy
 
 on:
   push:
-    branches: [ "main" ] # もし画面左上のブランチ名が master になっていたらここを master にしてください
+    branches: [ "main" ] # masterならmasterに
 
 permissions:
   id-token: write
   contents: read
 
 jobs:
-  aws-test:
+  terraform:
     runs-on: ubuntu-latest
     steps:
+      # 1. コードの読み込み
       - name: Checkout
         uses: actions/checkout@v4
 
+      # 2. AWSへのログイン
       - name: Configure AWS Credentials
         uses: aws-actions/configure-aws-credentials@v4
         with:
           role-to-assume: ${{ vars.AWS_ROLE_ARN }}
           aws-region: ap-northeast-1
 
-      - name: Test AWS Connection
-        run: aws sts get-caller-identity
+      # 3. Terraformを動かすための準備（セットアップ）
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+
+      # 4. Terraformの初期化（プラグインなどをダウンロードする）
+      - name: Terraform Init
+        run: terraform init
+
+      # 5. 【本番実行】設計図通りにAWSへVPCを作成する！
+      - name: Terraform Apply
+        run: terraform apply -auto-approve
