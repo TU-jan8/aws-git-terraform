@@ -145,7 +145,7 @@ data "aws_ami" "amazon_linux" {
 # プライベートEC2 (先にDBがないとWebが繋げないので上に配置)
 resource "aws_instance" "private_db" {
   ami                    = data.aws_ami.amazon_linux.id
-  instance_type          = "t3.micro" # 👈 t3.micro に修正
+  instance_type          = "t3.micro"
   subnet_id              = aws_subnet.private.id
   vpc_security_group_ids = [aws_security_group.db_sg.id]
   private_ip             = "10.0.2.10"
@@ -172,12 +172,12 @@ resource "aws_instance" "private_db" {
 # パブリックEC2
 resource "aws_instance" "public_web" {
   ami                    = data.aws_ami.amazon_linux.id
-  instance_type          = "t3.micro" # 👈 t3.micro に修正
+  instance_type          = "t3.micro"
   subnet_id              = aws_subnet.public.id
   vpc_security_group_ids = [aws_security_group.web_sg.id]
   depends_on             = [aws_instance.private_db]
 
-  # 🚀 ApacheとPHPをインストールし、画面からDBに文字を保存できるWebページを自動作成
+  # 🚀 ⚙️ サーバー起動時の自動設定スクリプト（PHPの開始タグを <?php に完全修正）
   user_data = <<-EOF
               #!/bin/bash
               dnf update -y
