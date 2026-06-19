@@ -1,4 +1,4 @@
-# 💡 すでにAWSに存在するパブリックEC2を特定します
+# 💡 1. 今動いているパブリックEC2を特定して情報を取ってくる
 data "aws_instance" "existing_web" {
   filter {
     name   = "tag:Name"
@@ -6,25 +6,22 @@ data "aws_instance" "existing_web" {
   }
 }
 
-# 🚀 そのEC2に対して、PHPのバグを直したスクリプト（<?php）を送り込んで、アパッチを再起動します
-resource "null_resource" "update_php" {
-  # コードが変更されたら毎回実行するためのトリガー
-  triggers = {
-    script_hash = md5(local.php_script)
-  }
+# 🚀 2. AWSの標準機能（SSM）を使って、鍵なしでEC2の中身のPHPを安全に上書きする
+resource "aws_ssm_association" "update_php" {
+  name             = "AWS-RunShellScript"
+  target_key       = "InstanceIds"
+  target_values    = [data.aws_instance.existing_web.id] # 👈 今あるEC2のIDを自動指定
 
-  # 遠隔でEC2の中身（index.php）を正しいコードで上書きする命令
-  provisioner "remote-exec" {
-    inline = [
-      "echo '${local.php_script}' > /tmp/index.php",
-      "sudo mv /tmp/index.php /var/www/html/index.php",
-      "sudo chown root:root /var/www/html/index.php",
-      "sudo systemctl restart httpd"
+  parameters = {
+    commands = [
+      "cat << 'PHP' > /var/www/html/index.php\n${local.php_script}\nPHP",
+      "chown root:root /var/www/html/index.php",
+      "systemctl restart httpd"
     ]
   }
 }
 
-# 🛠️ 修正版の正しいPHPプログラム（中身を完全に <?php に修正したもの）
+# 🛠️ 3. 修正版の正しいPHPプログラム（中身を完全に <?php に修正したもの）
 locals {
   php_script = <<-EOF
               <?php
@@ -60,7 +57,7 @@ locals {
               EOF
 }
 
-# 🌐 確認用URLをもう一度出力します
+# 🌐 4. 確認用URLをもう一度出力
 output "web_public_url" {
   value       = "http://${data.aws_instance.existing_web.public_ip}"
 }
