@@ -1,8 +1,17 @@
-name: AWS Terraform Deploy
+name: "AWS Terraform Deploy"
 
-# 🔽 ここを「workflow_dispatch」に変えることで、完全手動ボタン式になります
 on:
   workflow_dispatch:
+    # 💡 ココ！実行するときに「構築」か「解体」を画面で選べるようにします
+    inputs:
+      action:
+        description: '実行するアクションを選択してください'
+        required: true
+        default: 'apply'
+        type: choice
+        options:
+          - apply
+          - destroy
 
 permissions:
   id-token: write
@@ -15,11 +24,12 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Configure AWS Credentials
+      - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v4
         with:
-          role-to-assume: ${{ vars.AWS_ROLE_ARN }}
+          audience: sigv4
           aws-region: ap-northeast-1
+          role-to-assume: arn:aws:iam::058264368153:role/GitHubActionsWorkflowRole
 
       - name: Setup Terraform
         uses: hashicorp/setup-terraform@v3
@@ -27,5 +37,6 @@ jobs:
       - name: Terraform Init
         run: terraform init
 
-      - name: Terraform Apply
-        run: terraform apply -auto-approve
+      # 💡 画面で選んだアクション（apply または destroy）がここに自動で入ります
+      - name: Terraform Run
+        run: terraform ${{ github.event.inputs.action }} -auto-approve
