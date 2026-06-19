@@ -1,0 +1,25 @@
+name: AWS Connect Test
+
+on:
+  push:
+    branches: [ "main" ] # もし画面左上のブランチ名が master になっていたらここを master にしてください
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  aws-test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_ROLE_ARN }}
+          aws-region: ap-northeast-1
+
+      - name: Test AWS Connection
+        run: aws sts get-caller-identity
