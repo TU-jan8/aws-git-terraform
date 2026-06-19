@@ -1,30 +1,175 @@
-# 💡 1. 今動いているパブリックEC2を特定して情報を取ってくる
-data "aws_instance" "existing_web" {
+# ========================================================
+# 1. VPC & サブネット
+# ========================================================
+resource "aws_vpc" "main" {
+  cidr_block           = "10.0.0.0/16"
+  enable_dns_hostnames = true
+  tags                 = { Name = "git-actions-vpc" }
+}
+
+resource "aws_subnet" "public" {
+  vpc_id                  = aws_vpc.main.id
+  cidr_block              = "10.0.1.0/24"
+  availability_zone       = "ap-northeast-1a"
+  map_public_ip_on_launch = true
+  tags                 = { Name = "git-actions-public-subnet" }
+}
+
+resource "aws_subnet" "private" {
+  vpc_id            = aws_vpc.main.id
+  cidr_block        = "10.0.2.0/24"
+  availability_zone = "ap-northeast-1a"
+  tags              = { Name = "git-actions-private-subnet" }
+}
+
+# ========================================================
+# 2. インターネットゲートウェイ (IGW) & NATゲートウェイ (NAT-GW)
+# ========================================================
+resource "aws_internet_gateway" "igw" {
+  vpc_id = aws_vpc.main.id
+  tags   = { Name = "git-actions-igw" }
+}
+
+resource "aws_eip" "nat" {
+  domain = "vpc"
+  tags   = { Name = "git-actions-nat-eip" }
+}
+
+resource "aws_nat_gateway" "nat" {
+  allocation_id = aws_eip.nat.id
+  subnet_id     = aws_subnet.public.id
+  tags          = { Name = "git-actions-nat-gw" }
+  depends_on    = [aws_internet_gateway.igw]
+}
+
+# ========================================================
+# 3. ルートテーブル (道案内)
+# ========================================================
+resource "aws_route_table" "public" {
+  vpc_id = aws_vpc.main.id
+  route {
+    cidr_block = "0.0.0.0/0"
+    gateway_id = aws_internet_gateway.igw.id
+  }
+  tags = { Name = "git-actions-public-rt" }
+}
+
+resource "aws_route_table_association" "public" {
+  subnet_id      = aws_subnet.public.id
+  route_table_id = aws_route_table.public.id
+}
+
+resource "aws_route_table" "private" {
+  vpc_id = aws_vpc.main.id
+  route {
+    cidr_block     = "0.0.0.0/0"
+    nat_gateway_id = aws_nat_gateway.nat.id
+  }
+  tags = { Name = "git-actions-private-rt" }
+}
+
+resource "aws_route_table_association" "private" {
+  subnet_id      = aws_subnet.private.id
+  route_table_id = aws_route_table.private.id
+}
+
+# ========================================================
+# 4. セキュリティグループ (SG)
+# ========================================================
+resource "aws_security_group" "web_sg" {
+  name        = "git-actions-web-sg"
+  vpc_id      = aws_vpc.main.id
+
+  ingress {
+    from_port   = 80
+    to_port     = 80
+    protocol    = "tcp"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+  ingress {
+    from_port   = 22
+    to_port     = 22
+    protocol    = "tcp"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+  egress {
+    from_port   = 0
+    to_port     = 0
+    protocol    = "-1"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+  tags = { Name = "git-actions-web-sg" }
+}
+
+resource "aws_security_group" "db_sg" {
+  name        = "git-actions-db-sg"
+  vpc_id      = aws_vpc.main.id
+
+  ingress {
+    from_port       = 3306
+    to_port         = 3306
+    protocol        = "tcp"
+    security_groups = [aws_security_group.web_sg.id]
+  }
+  egress {
+    from_port   = 0
+    to_port     = 0
+    protocol    = "-1"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+  tags = { Name = "git-actions-db-sg" }
+}
+
+# ========================================================
+# 5. EC2 サーバー
+# ========================================================
+data "aws_ami" "amazon_linux" {
+  most_recent = true
+  owners      = ["amazon"]
   filter {
-    name   = "tag:Name"
-    values = ["git-actions-public-ec2"]
+    name   = "name"
+    values = ["al2023-ami-2023*-x86_64"]
   }
 }
 
-# 🚀 2. AWSのSSM機能を使って、正しい文法でEC2のPHPを上書きする
-resource "aws_ssm_association" "update_php" {
-  name = "AWS-RunShellScript"
+resource "aws_instance" "private_db" {
+  ami                    = data.aws_ami.amazon_linux.id
+  instance_type          = "t3.micro"
+  subnet_id              = aws_subnet.private.id
+  vpc_security_group_ids = [aws_security_group.db_sg.id]
+  private_ip             = "10.0.2.10"
 
-  # 正しいターゲットの指定方法
-  targets {
-    key    = "InstanceIds"
-    values = [data.aws_instance.existing_web.id]
-  }
+  user_data = <<-EOF
+              #!/bin/bash
+              dnf update -y
+              dnf install -y mariadb105-server
+              systemctl start mariadb
+              systemctl enable mariadb
+              mysql -e "CREATE DATABASE IF NOT EXISTS testdb;"
+              mysql -e "CREATE TABLE IF NOT EXISTS testdb.messages (id INT AUTO_INCREMENT PRIMARY KEY, content TEXT, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP);"
+              mysql -e "CREATE USER 'webuser'@'%' IDENTIFIED BY 'Password123!';"
+              mysql -e "GRANT ALL PRIVILEGES ON testdb.* TO 'webuser'@'%';"
+              mysql -e "FLUSH PRIVILEGES;"
+              EOF
 
-  # 正しいパラメータの指定方法（値を文字列として渡す）
-  parameters = {
-    commands = "cat << 'PHP' > /var/www/html/index.php\n${local.php_script}\nPHP\nchown root:root /var/www/html/index.php\nsystemctl restart httpd"
-  }
+  tags = { Name = "git-actions-private-ec2" }
 }
 
-# 🛠️ 3. 修正版の正しいPHPプログラム
-locals {
-  php_script = <<-EOF
+resource "aws_instance" "public_web" {
+  ami                    = data.aws_ami.amazon_linux.id
+  instance_type          = "t3.micro"
+  subnet_id              = aws_subnet.public.id
+  vpc_security_group_ids = [aws_security_group.web_sg.id]
+  depends_on             = [aws_instance.private_db]
+
+  user_data = <<-EOF
+              #!/bin/bash
+              dnf update -y
+              dnf install -y httpd php php-mysqlnd
+              systemctl start httpd
+              systemctl enable httpd
+              
+              cat << 'PHP' > /var/www/html/index.php
               <?php
               \$conn = new mysqli('10.0.2.10', 'webuser', 'Password123!', 'testdb');
               if (\$conn->connect_error) { die("接続失敗: " . \$conn->connect_error); }
@@ -55,10 +200,12 @@ locals {
                 </ul>
               </body>
               </html>
+              PHP
               EOF
+
+  tags = { Name = "git-actions-public-ec2" }
 }
 
-# 🌐 4. 確認用URLを出力
 output "web_public_url" {
-  value       = "http://${data.aws_instance.existing_web.public_ip}"
+  value = "http://${aws_instance.public_web.public_ip}"
 }
